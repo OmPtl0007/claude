@@ -1,221 +1,190 @@
 // ==========================================
-// GEMINI BRIDGE - SENTINEL (KEYWORD) LOGIC
+// 1. TRUSTED TYPES POLICY
 // ==========================================
+// This bypasses the 'TrustedHTML' assignment error
+const bridgePolicy = window.trustedTypes ? window.trustedTypes.createPolicy('gemini-bridge', {
+    createHTML: (string) => string,
+}) : { createHTML: (s) => s };
 
+// ==========================================
+// 2. STATE & CONFIG
+// ==========================================
 let bridgeInterval = null;
 let isProcessing = false;
 let lastKnownResponse = "";
 
 // ==========================================
-// STATUS OVERLAY UI
+// 3. STATUS OVERLAY UI
 // ==========================================
-
 function createOverlay() {
-  if (document.getElementById('gemini-bridge-overlay')) return;
+    if (document.getElementById('gemini-bridge-overlay')) return;
 
-  const overlay = document.createElement('div');
-  overlay.id = 'gemini-bridge-overlay';
-  overlay.style.cssText = `
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 999999;
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
-    font-size: 12px;
-    background: #0d0d0d;
-    border: 1px solid #2a2a2a;
-    border-radius: 10px;
-    padding: 12px 16px;
-    color: #e0e0e0;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-    min-width: 220px;
-    user-select: none;
-  `;
+    const overlay = document.createElement('div');
+    overlay.id = 'gemini-bridge-overlay';
+    overlay.style.cssText = `
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        z-index: 999999;
+        font-family: 'JetBrains Mono', 'Fira Code', monospace;
+        font-size: 12px;
+        background: #0d0d0d;
+        border: 1px solid #2a2a2a;
+        border-radius: 10px;
+        padding: 12px 16px;
+        color: #e0e0e0;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        min-width: 220px;
+        user-select: none;
+    `;
 
-  overlay.innerHTML = `
-    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
-      <span style="color:#666; letter-spacing:0.08em; font-size:10px; text-transform:uppercase;">Gemini Bridge</span>
-      <span id="bridge-dot" style="width:8px;height:8px;border-radius:50%;background:#444;display:inline-block;transition:background 0.3s;"></span>
-    </div>
-    <div id="bridge-status" style="color:#555; margin-bottom:12px; font-size:11px;">Idle</div>
-    <div style="display:flex; gap:8px;">
-      <button id="bridge-start-btn" onclick="startSentinelBridge()" style="
-        flex:1; padding:6px 0; border:none; border-radius:6px;
-        background:#1a3a1a; color:#4caf50; cursor:pointer;
-        font-family:inherit; font-size:11px; letter-spacing:0.05em;
-        transition: background 0.2s;
-      " onmouseover="this.style.background='#1f4a1f'" onmouseout="this.style.background='#1a3a1a'">▶ Start</button>
-      <button id="bridge-stop-btn" onclick="stopBridge()" style="
-        flex:1; padding:6px 0; border:none; border-radius:6px;
-        background:#2a1a1a; color:#666; cursor:pointer;
-        font-family:inherit; font-size:11px; letter-spacing:0.05em;
-        transition: background 0.2s;
-      " onmouseover="this.style.background='#3a1a1a'" onmouseout="this.style.background='#2a1a1a'">■ Stop</button>
-    </div>
-  `;
+    // Wrapped in bridgePolicy to satisfy Trusted Types
+    overlay.innerHTML = bridgePolicy.createHTML(`
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+            <span style="color:#666; letter-spacing:0.08em; font-size:10px; text-transform:uppercase;">Gemini Bridge</span>
+            <span id="bridge-dot" style="width:8px;height:8px;border-radius:50%;background:#444;display:inline-block;transition:background 0.3s;"></span>
+        </div>
+        <div id="bridge-status" style="color:#555; margin-bottom:12px; font-size:11px;">Idle</div>
+        <div style="display:flex; gap:8px;">
+            <button id="bridge-start-btn" style="
+                flex:1; padding:6px 0; border:none; border-radius:6px;
+                background:#1a3a1a; color:#4caf50; cursor:pointer;
+                font-family:inherit; font-size:11px; letter-spacing:0.05em;
+                transition: background 0.2s;
+            ">▶ Start</button>
+            <button id="bridge-stop-btn" style="
+                flex:1; padding:6px 0; border:none; border-radius:6px;
+                background:#2a1a1a; color:#666; cursor:pointer;
+                font-family:inherit; font-size:11px; letter-spacing:0.05em;
+                transition: background 0.2s;
+            ">■ Stop</button>
+        </div>
+    `);
 
-  document.body.appendChild(overlay);
-  console.log("🖥️  Bridge overlay injected. Use Start/Stop buttons or startSentinelBridge() / stopBridge().");
+    document.body.appendChild(overlay);
+
+    // Attach Event Listeners (Safer than inline onclick)
+    document.getElementById('bridge-start-btn').addEventListener('click', startSentinelBridge);
+    document.getElementById('bridge-stop-btn').addEventListener('click', stopBridge);
+
+    console.log("🖥️ Bridge overlay injected and listeners attached.");
 }
 
 function setOverlayStatus(state, message) {
-  const dot = document.getElementById('bridge-dot');
-  const status = document.getElementById('bridge-status');
-  const startBtn = document.getElementById('bridge-start-btn');
-  const stopBtn = document.getElementById('bridge-stop-btn');
+    const dot = document.getElementById('bridge-dot');
+    const status = document.getElementById('bridge-status');
+    if (!dot || !status) return;
 
-  if (!dot || !status) return;
+    const states = {
+        idle:       { dot: '#444',    text: '#555',   msg: 'Idle' },
+        listening:  { dot: '#4caf50', text: '#4caf50', msg: 'Listening...' },
+        processing: { dot: '#ff9800', text: '#ff9800', msg: message || 'Processing...' },
+        done:       { dot: '#2196f3', text: '#2196f3', msg: message || 'Done' },
+        stopped:    { dot: '#444',    text: '#555',   msg: 'Stopped' },
+    };
 
-  const states = {
-    idle:       { dot: '#444',    text: '#555',   msg: 'Idle' },
-    listening:  { dot: '#4caf50', text: '#4caf50', msg: 'Listening...' },
-    processing: { dot: '#ff9800', text: '#ff9800', msg: message || 'Processing...' },
-    done:       { dot: '#2196f3', text: '#2196f3', msg: message || 'Done' },
-    stopped:    { dot: '#444',    text: '#555',   msg: 'Stopped' },
-  };
+    const s = states[state] || states.idle;
+    dot.style.background = s.dot;
+    dot.style.animation = (state === 'listening') ? 'bridge-pulse 1.4s ease-in-out infinite' : '';
 
-  const s = states[state] || states.idle;
-  dot.style.background = s.dot;
-  if (state === 'listening') {
-    dot.style.animation = 'bridge-pulse 1.4s ease-in-out infinite';
-    if (!document.getElementById('bridge-keyframes')) {
-      const style = document.createElement('style');
-      style.id = 'bridge-keyframes';
-      style.textContent = `@keyframes bridge-pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`;
-      document.head.appendChild(style);
-    }
-  } else {
-    dot.style.animation = '';
-  }
-
-  status.style.color = s.text;
-  status.textContent = message || s.msg;
-
-  if (startBtn && stopBtn) {
-    if (state === 'idle' || state === 'stopped') {
-      startBtn.style.color = '#4caf50';
-      stopBtn.style.color = '#444';
-    } else {
-      startBtn.style.color = '#333';
-      stopBtn.style.color = '#f44336';
-    }
-  }
+    status.style.color = s.text;
+    status.textContent = message || s.msg;
 }
 
 // ==========================================
-// CORE BRIDGE LOGIC
+// 4. CORE BRIDGE LOGIC
 // ==========================================
-
 function sendGeminiPrompt(promptText) {
-  const input = document.querySelector('div.ql-editor.textarea');
-  const sendButton = document.querySelector('button.send-button');
-  if (!input) return;
+    const input = document.querySelector('div.ql-editor.textarea') || document.querySelector('[contenteditable="true"]');
+    const sendButton = document.querySelector('button.send-button') || document.querySelector('button[aria-label="Send message"]');
+    
+    if (!input) return;
 
-  input.focus();
-  document.execCommand('insertText', false, promptText);
+    input.focus();
+    // Using execCommand is often more reliable for contenteditables in automation
+    document.execCommand('insertText', false, promptText);
 
-  setTimeout(() => {
-    if (sendButton && !sendButton.disabled) sendButton.click();
-  }, 150);
+    setTimeout(() => {
+        if (sendButton && !sendButton.disabled) sendButton.click();
+    }, 250);
 }
 
 function getLastGeminiResponse() {
-  const messages = document.querySelectorAll('message-content');
-  if (messages.length === 0) {
-    // Fallback for different UI versions
-    const altMessages = document.querySelectorAll('.model-response-text');
-    if (altMessages.length > 0) return altMessages[altMessages.length - 1].innerText.trim();
-    return "";
-  }
-  const lastMessage = messages[messages.length - 1];
-  
-  // Try to find markdown content first
-  const markdownView = lastMessage.querySelector('.markdown') || lastMessage.querySelector('.message-content-wrapper');
-  if (markdownView) return markdownView.innerText.trim();
-  
-  // Fallback to pre/code
-  const codeBlock = lastMessage.querySelector('pre code') || lastMessage.querySelector('pre');
-  if (codeBlock) return codeBlock.innerText.trim();
-  
-  return lastMessage.innerText.trim();
+    const messages = document.querySelectorAll('message-content');
+    if (messages.length === 0) {
+        const altMessages = document.querySelectorAll('.model-response-text');
+        if (altMessages.length > 0) return altMessages[altMessages.length - 1].innerText.trim();
+        return "";
+    }
+    const lastMessage = messages[messages.length - 1];
+    const markdownView = lastMessage.querySelector('.markdown') || lastMessage.querySelector('.message-content-wrapper');
+    if (markdownView) return markdownView.innerText.trim();
+    
+    return lastMessage.innerText.trim();
 }
 
 function startSentinelBridge() {
-  if (bridgeInterval) {
-    console.log("⚠️  Bridge already running.");
-    return;
-  }
+    if (bridgeInterval) return;
 
-  createOverlay();
-  setOverlayStatus('listening');
-  console.log("🟢 Sentinel Bridge STARTED! Waiting for tasks...");
+    createOverlay();
+    setOverlayStatus('listening');
+    console.log("🟢 Sentinel Bridge STARTED!");
 
-  bridgeInterval = setInterval(async () => {
-    if (isProcessing) return;
+    bridgeInterval = setInterval(async () => {
+        if (isProcessing) return;
 
-    try {
-      const res = await fetch('http://127.0.0.1:5000/browser');
-      const data = await res.json();
+        try {
+            const res = await fetch('http://127.0.0.1:5000/browser');
+            const data = await res.json();
 
-      if (data.has_task) {
-        isProcessing = true;
-        setOverlayStatus('processing', 'Sending to Gemini...');
-        lastKnownResponse = getLastGeminiResponse();
-        sendGeminiPrompt(data.prompt);
+            if (data.has_task) {
+                isProcessing = true;
+                setOverlayStatus('processing', 'Sending to Gemini...');
+                lastKnownResponse = getLastGeminiResponse();
+                sendGeminiPrompt(data.prompt);
 
-        let lastSentIndex = 0;
+                let lastSentIndex = 0;
+                let checkInterval = setInterval(async () => {
+                    let currentResponse = getLastGeminiResponse();
 
-        let checkInterval = setInterval(async () => {
-          let currentResponse = getLastGeminiResponse();
+                    if (currentResponse !== lastKnownResponse && currentResponse.length > 0) {
+                        if (lastSentIndex === 0) setOverlayStatus('processing', 'Streaming...');
 
-          if (currentResponse !== lastKnownResponse && currentResponse.length > 0) {
-            if (lastSentIndex === 0) setOverlayStatus('processing', 'Streaming response...');
+                        let newText = currentResponse.substring(lastSentIndex);
+                        if (newText.length > 0) {
+                            await fetch('http://127.0.0.1:5000/browser/chunk', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ chunk: newText })
+                            });
+                            lastSentIndex = currentResponse.length;
+                        }
 
-            let newText = currentResponse.substring(lastSentIndex);
-            if (newText.length > 0) {
-              await fetch('http://127.0.0.1:5000/browser/chunk', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chunk: newText })
-              });
-              lastSentIndex = currentResponse.length;
+                        // Check for completion keyword
+                        if (currentResponse.toLowerCase().includes("response_completed")) {
+                            clearInterval(checkInterval);
+                            setOverlayStatus('done', 'Done ✓');
+                            await fetch('http://127.0.0.1:5000/browser/done', { method: 'POST' });
+                            isProcessing = false;
+                            setTimeout(() => { if (bridgeInterval) setOverlayStatus('listening'); }, 1500);
+                        }
+                    }
+                }, 400);
             }
-
-            if (currentResponse.toLowerCase().includes("response_completed")) {
-              clearInterval(checkInterval);
-              setOverlayStatus('done', 'Done ✓');
-              await fetch('http://127.0.0.1:5000/browser/done', { method: 'POST' });
-              console.log("✅ Sentinel detected. Task complete.");
-              isProcessing = false;
-              setTimeout(() => {
-                if (bridgeInterval) setOverlayStatus('listening');
-              }, 1500);
-            }
-          }
-        }, 400);
-      }
-    } catch (e) {
-      // server not reachable — keep trying silently
-    }
-  }, 2000);
+        } catch (e) {
+            // Silently wait for server
+        }
+    }, 2000);
 }
 
 function stopBridge() {
-  if (!bridgeInterval) {
-    console.log("⚠️  Bridge is not running.");
-    return;
-  }
-  clearInterval(bridgeInterval);
-  bridgeInterval = null;
-  isProcessing = false;
-  setOverlayStatus('stopped');
-  console.log("🔴 Bridge Stopped.");
+    if (!bridgeInterval) return;
+    clearInterval(bridgeInterval);
+    bridgeInterval = null;
+    isProcessing = false;
+    setOverlayStatus('stopped');
+    console.log("🔴 Bridge Stopped.");
 }
 
-// ==========================================
-// INIT
-// ==========================================
-
+// Initialize UI
 createOverlay();
-setOverlayStatus('idle');
-console.log("Bridge loaded. Click ▶ Start in the overlay or call startSentinelBridge().");
